@@ -9,6 +9,9 @@ runs:
   steps:
     - name: Install pinned wasm-pack
       shell: bash
+      env:
+        # 릴리스 바이너리를 인증해서 받는 데 쓴다(아래 curl 주석 참고).
+        DOWNLOAD_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         # [#2233] 버전 변경은 여기 한 곳 + Dockerfile 만 갱신한다.
@@ -21,7 +24,17 @@ runs:
           echo "wasm-pack ${WASM_PACK_VERSION} already installed — skip"
         else
           TARBALL="wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl"
-          URL="https://github.com/rustwasm/wasm-pack/releases/download/v${WASM_PACK_VERSION}/${TARBALL}.tar.gz"
+          # 저장소가 rustwasm → wasm-bindgen 조직으로 옮겨졌다. 옛 주소는 301 로 넘어가므로
+          # 리다이렉트를 한 번 덜 타도록 새 주소를 직접 쓴다.
+          URL="https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/${TARBALL}.tar.gz"
+          # 익명 다운로드는 GitHub 이 부하를 받으면 먼저 504 로 막힌다(2026-11-09 장애 때
+          # 6회 재시도가 전부 504). 같은 URL 도 인증하면 통과했으므로 토큰이 있으면 붙인다.
+          # curl 은 다른 호스트로 리다이렉트될 때(objects.githubusercontent.com) 이 헤더를
+          # 넘기지 않으므로, 토큰은 github.com 에만 간다.
+          auth_args=()
+          if [[ -n "${DOWNLOAD_TOKEN:-}" ]]; then
+            auth_args=(-H "Authorization: Bearer ${DOWNLOAD_TOKEN}")
+          fi
           # [#3289] 고정 /tmp 경로는 동시 잡 간 전개 충돌 — mktemp 로 격리하고,
           # 설치는 같은 디렉터리 임시명 → rename(원자적 교체)으로 부분 바이너리 노출을 막는다.
           tmpdir="$(mktemp -d)"
@@ -29,7 +42,7 @@ runs:
           # [#3431] 파이프가 아니라 파일로 먼저 받는다. 5xx뿐 아니라 전송 중단도 전체
           # 파일을 다시 받아야 tar에 앞선 조각과 재시도 스트림이 이어지지 않는다.
           curl -sSfL --retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors \
-            -o "$tmpdir/wasm-pack.tar.gz" "$URL"
+            ${auth_args[@]+"${auth_args[@]}"} -o "$tmpdir/wasm-pack.tar.gz" "$URL"
           tar -xzf "$tmpdir/wasm-pack.tar.gz" -C "$tmpdir"
           # [#3284] sudo 없이 사용자 경로(~/.cargo/bin)에 배치 — self-hosted 러너의
           # 제한된 sudo(apt 한정)와 호스티드 러너 양쪽에서 동일하게 동작한다.
